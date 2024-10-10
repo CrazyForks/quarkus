@@ -957,6 +957,51 @@ Alternatively, you can use the `@LookupIfProperty` and `@LookupUnlessProperty` a
  }
 ----
 
+=== Sorting beans obtained with programmatic lookup
+
+If there is more than one bean that matches the required type and qualifiers and is eligible for injection, it is possible to iterate (or stream) available bean instances.
+Beans returned by both stream and iterator methods are sorted by priority as defined by `io.quarkus.arc.InjectableBean#getPriority()`. Higher priority goes first.
+If no priority is explicitly declared, 0 is assumed.
+
+[source,java]
+----
+interface Service {
+
+}
+
+@Priority(100)
+@ApplicationScoped
+class FirstService implements Service {
+
+}
+
+@Priority(10)
+@ApplicationScoped
+class SecondService implements Service {
+
+}
+
+@ApplicationScoped
+class ThirdService implements Service {
+
+}
+
+@ApplicationScoped
+class Client {
+
+   @Inject
+   Instance<Service> serviceInstance;
+
+   void printServiceName() {
+       if(service.isAmbiguous()){
+           for (Service service : serviceInstance) {
+                // FirstService, SecondService, ThirdService
+           }
+       }
+   }
+}
+----
+
 [[injecting-multiple-bean-instances-intuitively]]
 === Injecting Multiple Bean Instances Intuitively
 
@@ -1285,6 +1330,28 @@ public void register(RegistrationContext context) {
 ----
 
 <1> The argument is the bindings source class.
+
+=== `Instance.Handle.close()` Behavior
+
+Per the CDI specification, the `Instance.Handle.close()` method always delegates to `destroy()`.
+In ArC, this is only true in the <<strict_mode>>.
+
+In the default mode, the `close()` method only delegates to `destroy()` when the bean is `@Dependent` (or when the instance handle does not represent a CDI contextual object).
+When the instance handle represents a bean of any other scope, the `close()` method does nothing; the bean is left as is and will be destroyed whenever its context is destroyed.
+
+This is to make the following code behave as one would naively expect:
+
+[source,java]
+----
+Instance<T> instance = ...;
+try (Instance.Handle<T> handle : instance.getHandle()) {
+   T value = handle.get();
+   ... use value ...
+}
+----
+
+The `@Dependent` beans are destroyed immediately, while other beans are not destroyed at all.
+This is important when multiple beans of different scopes might be returned by the `Instance`.
 
 [[reactive_pitfalls]]
 == Pitfalls with Reactive Programming

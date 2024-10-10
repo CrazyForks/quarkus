@@ -15,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
@@ -37,6 +38,7 @@ import javax.crypto.SecretKey;
 import org.awaitility.core.ThrowingRunnable;
 import org.eclipse.microprofile.jwt.Claims;
 import org.hamcrest.Matchers;
+import org.htmlunit.FailingHttpStatusCodeException;
 import org.htmlunit.SilentCssErrorHandler;
 import org.htmlunit.TextPage;
 import org.htmlunit.WebClient;
@@ -104,6 +106,33 @@ public class CodeFlowAuthorizationTest {
             assertEquals("Welcome, clientId: quarkus-web-app", textPage.getContent());
             assertNull(getSessionCookie(webClient, "code-flow"));
             // Clear the post logout cookie
+            webClient.getCookieManager().clearCookies();
+        }
+        clearCache();
+    }
+
+    @Test
+    public void testCodeFlowOpaqueAccessToken() throws IOException {
+        defineCodeFlowOpaqueAccessTokenStub();
+        try (final WebClient webClient = createWebClient()) {
+            webClient.getOptions().setRedirectEnabled(true);
+            HtmlPage page = webClient.getPage("http://localhost:8081/code-flow-opaque-access-token");
+
+            HtmlForm form = page.getFormByName("form");
+            form.getInputByName("username").type("alice");
+            form.getInputByName("password").type("alice");
+
+            TextPage textPage = form.getInputByValue("login").click();
+
+            assertEquals("alice", textPage.getContent());
+
+            try {
+                webClient.getPage("http://localhost:8081/code-flow-opaque-access-token/jwt-access-token");
+                fail("500 status error is expected");
+            } catch (FailingHttpStatusCodeException ex) {
+                assertEquals(500, ex.getStatusCode());
+            }
+
             webClient.getCookieManager().clearCookies();
         }
         clearCache();
@@ -423,21 +452,37 @@ public class CodeFlowAuthorizationTest {
                         Assertions.assertTrue(Files.exists(accessLogFilePath),
                                 "quarkus log file " + accessLogFilePath + " is missing");
 
-                        boolean signedUserInfoLogDetected = false;
+                        boolean lineConfirmingVerificationDetected = false;
+                        boolean signedUserInfoResponseFilterMessageDetected = false;
+                        boolean codeFlowCompletedResponseFilterMessageDetected = false;
 
                         try (BufferedReader reader = new BufferedReader(
                                 new InputStreamReader(new ByteArrayInputStream(Files.readAllBytes(accessLogFilePath)),
                                         StandardCharsets.UTF_8))) {
-                            String line = null;
+                            String line;
                             while ((line = reader.readLine()) != null) {
                                 if (line.contains("Verifying the signed UserInfo with the local JWK keys: ey")) {
-                                    signedUserInfoLogDetected = true;
+                                    lineConfirmingVerificationDetected = true;
+                                } else if (line.contains("Response contains signed UserInfo")) {
+                                    signedUserInfoResponseFilterMessageDetected = true;
+                                } else if (line.contains(
+                                        "Authorization code completed for tenant 'code-flow-user-info-github-cached-in-idtoken'")) {
+                                    codeFlowCompletedResponseFilterMessageDetected = true;
+                                }
+                                if (lineConfirmingVerificationDetected
+                                        && signedUserInfoResponseFilterMessageDetected
+                                        && codeFlowCompletedResponseFilterMessageDetected) {
                                     break;
                                 }
                             }
+
                         }
-                        assertTrue(signedUserInfoLogDetected,
+                        assertTrue(lineConfirmingVerificationDetected,
+                                "Log file must contain a record confirming that signed UserInfo is verified");
+                        assertTrue(signedUserInfoResponseFilterMessageDetected,
                                 "Log file must contain a record confirming that signed UserInfo is returned");
+                        assertTrue(codeFlowCompletedResponseFilterMessageDetected,
+                                "Log file must contain a record confirming that the code flow is completed");
 
                     }
                 });
@@ -658,6 +703,16 @@ public class CodeFlowAuthorizationTest {
                                                 .jws()
                                                 .keyId("1").sign("privateKey.jwk"))));
 
+    }
+
+    private void defineCodeFlowOpaqueAccessTokenStub() {
+        wireMockServer
+                .stubFor(WireMock.post(urlPathMatching("/auth/realms/quarkus/opaque-access-token"))
+                        .willReturn(WireMock.aResponse()
+                                .withHeader("Content-Type", "application/json")
+                                .withBody("{\n" +
+                                        "  \"access_token\": \"alice\","
+                                        + "\"expires_in\": 299}")));
     }
 
     private String generateAlreadyExpiredRefreshToken() {

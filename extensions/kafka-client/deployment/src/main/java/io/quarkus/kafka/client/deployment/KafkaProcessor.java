@@ -69,6 +69,7 @@ import io.quarkus.deployment.annotations.ExecutionTime;
 import io.quarkus.deployment.annotations.Record;
 import io.quarkus.deployment.builditem.AdditionalIndexedClassesBuildItem;
 import io.quarkus.deployment.builditem.CombinedIndexBuildItem;
+import io.quarkus.deployment.builditem.ConfigDescriptionBuildItem;
 import io.quarkus.deployment.builditem.ExtensionSslNativeSupportBuildItem;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.IndexDependencyBuildItem;
@@ -105,6 +106,7 @@ import io.quarkus.kafka.client.serialization.JsonbSerializer;
 import io.quarkus.kafka.client.serialization.ObjectMapperDeserializer;
 import io.quarkus.kafka.client.serialization.ObjectMapperSerializer;
 import io.quarkus.kafka.client.tls.QuarkusKafkaSslEngineFactory;
+import io.quarkus.runtime.annotations.ConfigPhase;
 import io.quarkus.smallrye.health.deployment.spi.HealthBuildItem;
 
 public class KafkaProcessor {
@@ -195,8 +197,21 @@ public class KafkaProcessor {
 
     @BuildStep
     void contributeClassesToIndex(BuildProducer<AdditionalIndexedClassesBuildItem> additionalIndexedClasses,
-            BuildProducer<IndexDependencyBuildItem> indexDependency) {
+            BuildProducer<IndexDependencyBuildItem> indexDependency, Capabilities capabilities) {
         indexDependency.produce(new IndexDependencyBuildItem("org.apache.kafka", "kafka-clients"));
+        additionalIndexedClasses.produce(new AdditionalIndexedClassesBuildItem(
+                JsonObjectSerializer.class.getName(),
+                JsonObjectDeserializer.class.getName(),
+                JsonArraySerializer.class.getName(),
+                JsonArrayDeserializer.class.getName(),
+                BufferSerializer.class.getName(),
+                BufferDeserializer.class.getName(),
+                ObjectMapperSerializer.class.getName(),
+                ObjectMapperDeserializer.class.getName()));
+        if (capabilities.isPresent(Capability.JSONB)) {
+            additionalIndexedClasses.produce(new AdditionalIndexedClassesBuildItem(
+                    JsonbSerializer.class.getName(), JsonbDeserializer.class.getName()));
+        }
     }
 
     @BuildStep
@@ -214,6 +229,7 @@ public class KafkaProcessor {
     @BuildStep
     public void build(
             KafkaBuildTimeConfig config, CurateOutcomeBuildItem curateOutcomeBuildItem,
+            BuildProducer<ConfigDescriptionBuildItem> configDescBuildItems,
             CombinedIndexBuildItem indexBuildItem, BuildProducer<ReflectiveClassBuildItem> reflectiveClass,
             BuildProducer<ServiceProviderBuildItem> serviceProviders,
             BuildProducer<NativeImageProxyDefinitionBuildItem> proxies,
@@ -289,6 +305,8 @@ public class KafkaProcessor {
 
         reflectiveClass.produce(
                 ReflectiveClassBuildItem.builder(QuarkusKafkaSslEngineFactory.class).build());
+        configDescBuildItems.produce(new ConfigDescriptionBuildItem("kafka.tls-configuration-name", null,
+                "The tls-configuration to use for the Kafka client", null, null, ConfigPhase.RUN_TIME));
     }
 
     @BuildStep(onlyIf = { HasSnappy.class, NativeOrNativeSourcesBuild.class })
